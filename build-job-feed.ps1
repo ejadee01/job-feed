@@ -338,6 +338,10 @@ render();
 const REPO = 'ejadee01/job-feed', WORKFLOW = 'refresh.yml', BUILD = '__BUILD__';
 const API = 'https://api.github.com/repos/' + REPO;
 $('manual').href = 'https://github.com/' + REPO + '/actions/workflows/' + WORKFLOW;
+// Browsers may show a cached copy for up to 10 minutes; switch to the newest published version if there is one
+if (location.protocol.startsWith('http')) fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' })
+  .then(r => r.text()).then(html => { const m = html.match(/name="build" content="([^"]+)"/);
+    if (m && m[1] > BUILD) location.replace(location.pathname + '?v=' + Date.now()); }).catch(() => {});
 const store = { get: () => { try { return localStorage.getItem('gh_token') || ''; } catch { return ''; } },
                 set: v => { try { v ? localStorage.setItem('gh_token', v) : localStorage.removeItem('gh_token'); } catch {} } };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
