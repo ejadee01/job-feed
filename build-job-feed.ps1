@@ -275,7 +275,7 @@ function render() {
 render();
 </script></body></html>
 '@
-$html = $template.Replace('__DATA__', $json).Replace('__MIN__', ('{0:N0}' -f $MinMonthlyPhp)).Replace('__UPDATED__', (Get-Date).ToString('MMM d, yyyy h:mm tt'))
+$html = $template.Replace('__DATA__', $json).Replace('__MIN__', ('{0:N0}' -f $MinMonthlyPhp)).Replace('__UPDATED__', ([DateTime]::UtcNow.AddHours(8).ToString('MMM d, yyyy h:mm tt') + ' PH time'))
 [IO.File]::WriteAllText($HtmlFile, $html, (New-Object Text.UTF8Encoding $false))
 
 $withPay = @($selected | ? { $_.MonthlyPhp }).Count
