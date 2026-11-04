@@ -257,7 +257,7 @@ h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 20px;font-si
 <p class="sub">Remote (open to the Philippines) or Davao City &middot; min PHP __MIN__/month or equivalent &middot; updated <span id="updated">__UPDATED__</span></p>
 <div class="status" id="status"></div>
 <div class="setup" id="setup" hidden>
-<b>One-time setup on this device</b> &ndash; the button needs a GitHub token that can only run this job refresh.
+<b>Optional: one-click refresh on this device</b> &ndash; skips the GitHub tab by saving a GitHub token that can only run this job refresh.
 <ol>
 <li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a> on GitHub.</li>
 <li>Repository access: <b>Only select repositories</b> &rarr; <b>job-feed</b>.</li>
@@ -266,7 +266,7 @@ h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 20px;font-si
 </ol>
 <div class="row"><input type="password" id="token" placeholder="github_pat_..." autocomplete="off">
 <button class="btn" id="save">Save &amp; refresh</button>
-<a class="btn ghost" id="manual" target="_blank" rel="noopener">Run on GitHub instead</a></div>
+<button class="btn ghost" id="cancel" type="button">Close</button></div>
 </div>
 <div class="bar">
 <input type="search" id="q" placeholder="Search title, company, location">
@@ -337,7 +337,7 @@ render();
 // ---- Manual refresh: runs the GitHub workflow, then reloads once the new page is published ----
 const REPO = 'ejadee01/job-feed', WORKFLOW = 'refresh.yml', BUILD = '__BUILD__';
 const API = 'https://api.github.com/repos/' + REPO;
-$('manual').href = 'https://github.com/' + REPO + '/actions/workflows/' + WORKFLOW;
+const RUN_PAGE = 'https://github.com/' + REPO + '/actions/workflows/' + WORKFLOW;
 // Browsers may show a cached copy for up to 10 minutes; switch to the newest published version if there is one
 if (location.protocol.startsWith('http')) fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' })
   .then(r => r.text()).then(html => { const m = html.match(/name="build" content="([^"]+)"/);
@@ -345,33 +345,44 @@ if (location.protocol.startsWith('http')) fetch(location.pathname + '?v=' + Date
 const store = { get: () => { try { return localStorage.getItem('gh_token') || ''; } catch { return ''; } },
                 set: v => { try { v ? localStorage.setItem('gh_token', v) : localStorage.removeItem('gh_token'); } catch {} } };
 const sleep = ms => new Promise(r => setTimeout(r, ms));
-const say = t => { $('status').textContent = t; };
+const say = (t, html) => { $('status')[html ? 'innerHTML' : 'textContent'] = t; };
+// Reads work without a token because the repo is public; starting a run needs the optional token
 async function gh(path, opts = {}) {
-  const res = await fetch(API + path, { ...opts, headers: { Authorization: 'Bearer ' + store.get(),
-    Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
-  if (res.status === 401 || res.status === 403 || res.status === 404) { const e = new Error('auth'); e.status = res.status; throw e; }
+  const headers = { Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' };
+  if (store.get()) headers.Authorization = 'Bearer ' + store.get();
+  const res = await fetch(API + path, { ...opts, headers });
+  if (store.get() && (res.status === 401 || res.status === 404 || (res.status === 403 && opts.method === 'POST'))) {
+    const e = new Error('auth'); e.status = res.status; throw e; }
+  if (res.status === 403 || res.status === 429) throw new Error('GitHub is limiting status checks right now; the new jobs will still appear - reload in a few minutes');
   if (!res.ok) throw new Error('GitHub returned ' + res.status);
   return res.status === 204 ? null : res.json();
 }
-async function refreshJobs() {
+const latestRun = async () => (await gh('/actions/workflows/' + WORKFLOW + '/runs?per_page=1')).workflow_runs[0];
+async function refreshJobs(useToken) {
   const btn = $('refresh'); btn.disabled = true; $('setup').hidden = true;
   const started = Date.now();
   const tick = setInterval(() => { const s = Math.round((Date.now() - started) / 1000);
     btn.textContent = 'Refreshing… ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }, 1000);
   try {
-    // Follow a run that is already going, otherwise start one
-    let run = (await gh('/actions/workflows/' + WORKFLOW + '/runs?per_page=1')).workflow_runs[0];
-    if (!run || run.status === 'completed') {
+    let run = await latestRun();
+    const isNew = r => r && Date.parse(r.created_at) >= started - 60000 && (!run || r.id !== run.id);
+    if (run && run.status !== 'completed') {
+      // A refresh is already running - just follow it
+    } else if (useToken) {
       say('Starting the job search on GitHub…');
       await gh('/actions/workflows/' + WORKFLOW + '/dispatches', { method: 'POST', body: JSON.stringify({ ref: 'main' }) });
-      for (let i = 0; i < 20; i++) {
-        await sleep(3000);
-        const r = (await gh('/actions/workflows/' + WORKFLOW + '/runs?per_page=1')).workflow_runs[0];
-        if (r && Date.parse(r.created_at) >= started - 60000 && (!run || r.id !== run.id)) { run = r; break; }
-      }
+      for (let i = 0; i < 20; i++) { await sleep(3000); const r = await latestRun(); if (isNew(r)) { run = r; break; } }
+    } else {
+      say('In the GitHub tab, click <b>Run workflow</b>, then the green <b>Run workflow</b> button. This page updates itself when the new jobs are ready. ' +
+          '<a href="' + RUN_PAGE + '" target="_blank" rel="noopener">Open GitHub again</a> &middot; <a href="#" id="setup-link">Skip this step next time</a>', true);
+      $('setup-link').onclick = e => { e.preventDefault(); $('setup').hidden = false; $('token').focus(); };
+      let found = null;
+      for (let i = 0; i < 40 && !found; i++) { await sleep(15000); const r = await latestRun(); if (isNew(r)) found = r; }
+      if (!found) throw new Error('no new run was started on GitHub. Click Refresh jobs to try again');
+      run = found;
     }
     say('Collecting the latest postings from all job sites (about 5 minutes)…');
-    while (run.status !== 'completed') { await sleep(10000); run = await gh('/actions/runs/' + run.id); }
+    while (run.status !== 'completed') { await sleep(20000); run = await gh('/actions/runs/' + run.id); }
     if (run.conclusion !== 'success') throw new Error('the refresh failed on GitHub (' + run.conclusion + ')');
     say('Publishing the updated page…');
     for (let i = 0; i < 40; i++) {
@@ -388,12 +399,15 @@ async function refreshJobs() {
   } finally { clearInterval(tick); btn.disabled = false; btn.innerHTML = '&#x21bb; Refresh jobs'; }
 }
 $('refresh').addEventListener('click', () => {
-  if (store.get()) refreshJobs(); else { $('setup').hidden = !$('setup').hidden; $('token').focus(); }
+  if (store.get()) return refreshJobs(true);
+  window.open(RUN_PAGE, '_blank', 'noopener');   // must open during the click, or popup blockers stop it
+  refreshJobs(false);
 });
 $('save').addEventListener('click', () => {
   const t = $('token').value.trim(); if (!t) return;
-  store.set(t); $('token').value = ''; refreshJobs();
+  store.set(t); $('token').value = ''; say('Saved. Next time, Refresh jobs runs in one click.');
 });
+$('cancel').addEventListener('click', () => { $('setup').hidden = true; });
 </script></body></html>
 '@
 $html = $template.Replace('__DATA__', $json).Replace('__MIN__', ('{0:N0}' -f $MinMonthlyPhp)).Replace('__BUILD__', [DateTime]::UtcNow.ToString('yyyyMMddHHmmss')).Replace('__UPDATED__', ([DateTime]::UtcNow.AddHours(8).ToString('MMM d, yyyy h:mm tt') + ' PH time'))
