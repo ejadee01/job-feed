@@ -6,6 +6,6 @@ Daily list of CFO / Controller / Accountant jobs that are remote (open to the Ph
 - `jobs-feed.xml` — the same jobs as an RSS feed
 - `build-job-feed.ps1` — builds both files; settings (minimum pay, keywords, exchange rates) are at the top
 
-Sources: JobStreet, LinkedIn, Kalibrr, Himalayas, Jobicy, Remotive, Remote OK. Indeed blocks automated access, so it is not included.
+Sources: JobStreet, LinkedIn, Kalibrr, OnlineJobs.ph, Himalayas, Jobicy, Remotive, Remote OK. Indeed blocks automated access, so it is not included.
 
 A GitHub Action (`.github/workflows/refresh.yml`) rebuilds the files every day at 7:00 AM Philippine time. To run it now: Actions tab → Refresh job feed → Run workflow.

@@ -151,6 +151,34 @@ foreach ($q in $Keywords) {
     }
 }
 
+# OnlineJobs.ph: remote jobs for Filipino workers (robots.txt asks for a 5-second crawl delay)
+foreach ($q in $Keywords) {
+    foreach ($offset in '', '/30') {
+        Start-Sleep -Seconds 5
+        $url = "https://www.onlinejobs.ph/jobseekers/jobsearch$offset" + '?jobkeyword=' + [uri]::EscapeDataString($q)
+        try { $wc.Headers['User-Agent'] = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/130.0'; $html = $wc.DownloadString($url) }
+        catch { Write-Warning "Failed: $url - $($_.Exception.Message)"; continue }
+        foreach ($card in ($html -split '<a href="/jobseekers/job/' | Select-Object -Skip 1)) {
+            if ($card -notmatch 'jobpost-cat-box') { continue }
+            $slug = ($card -split '"')[0]
+            $m = [regex]::Match($card, '<h4[^>]*>(.*?)<span[^>]*>(.*?)</span>', 'Singleline')
+            $title = [Net.WebUtility]::HtmlDecode($m.Groups[1].Value.Trim()); $type = $m.Groups[2].Value.Trim()
+            if (-not $title) { continue }
+            $date = [regex]::Match($card, 'data-temp-2="([^"]+)"').Groups[1].Value
+            $pay = [Net.WebUtility]::HtmlDecode([regex]::Match($card, 'icon-round-dollar.*?<dd[^>]*>(.*?)</dd>', 'Singleline').Groups[1].Value.Trim())
+            $desc = ([regex]::Match($card, 'class="desc[^"]*">(.*?)<a ', 'Singleline').Groups[1].Value -replace '<[^>]+>', ' ' -replace '\s+', ' ').Trim()
+            # Salary is free text: no currency usually means USD/month; big numbers are pesos; tiny ones are hourly
+            $s = Read-SalaryLabel $pay
+            if ($s[0] -and $pay -notmatch '\$|USD|₱|PHP|peso|php') {
+                $s[2] = if ($s[1] -ge 10000) { 'PHP' } else { 'USD' }
+                if ($s[1] -lt 30 -or $pay -match 'hr|hour') { $s[3] = 'hour' }
+            } elseif ($s[0] -and $pay -match '₱|PHP|peso') { $s[2] = 'PHP' }
+            $when = if ($date) { [datetime]::SpecifyKind([datetime]$date, 'Utc') } else { Get-Date }
+            Add-Job $title "OnlineJobs.ph employer ($type)" "https://www.onlinejobs.ph/jobseekers/job/$slug" 'Remote - Philippines' $when 'OnlineJobs.ph' $s[0] $s[1] $s[2] $s[3] $desc
+        }
+    }
+}
+
 # ---------------- Filter ----------------
 $seen = @{}
 $selected = $jobs | Where-Object {
@@ -169,7 +197,7 @@ $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine('<rss version="2.0"><channel>')
 [void]$sb.AppendLine('<title>CFO / Controller / Accountant jobs - Remote (PH) or Davao</title>')
 [void]$sb.AppendLine('<link>https://himalayas.app/jobs/countries/philippines</link>')
-[void]$sb.AppendLine("<description>Min PHP $('{0:N0}' -f $MinMonthlyPhp)/month or equivalent. Sources: JobStreet, LinkedIn, Kalibrr, Himalayas, Jobicy, Remotive, Remote OK.</description>")
+[void]$sb.AppendLine("<description>Min PHP $('{0:N0}' -f $MinMonthlyPhp)/month or equivalent. Sources: JobStreet, LinkedIn, Kalibrr, OnlineJobs.ph, Himalayas, Jobicy, Remotive, Remote OK.</description>")
 [void]$sb.AppendLine("<lastBuildDate>$((Get-Date).ToUniversalTime().ToString('r'))</lastBuildDate>")
 foreach ($m in $selected) {
     $pay = if ($m.MonthlyPhp) { "~PHP {0:N0}/mo" -f $m.MonthlyPhp } else { 'Salary not stated' }
