@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: write
+  pages: write
 
 jobs:
   refresh:
@@ -27,3 +28,9 @@ jobs:
           git add jobs.html jobs-feed.xml
           git diff --cached --quiet || git commit -m "Refresh job feed $(date -u +%Y-%m-%d)"
           git push
+
+      - name: Rebuild GitHub Pages site
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api -X POST "repos/${{ github.repository }}/pages/builds"
