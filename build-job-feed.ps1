@@ -7,7 +7,7 @@
 $MinMonthlyPhp   = 80000
 $IncludeNoSalary = $true    # most PH listings hide the salary; set $false to keep only confirmed matches
 $TitlePattern    = '\b(CFO|chief financial officer|financial controller|controller|comptroller|accountant|accounting manager|head of accounting|finance director)\b'
-$ExcludePattern  = 'air traffic|traffic controller|quality controller|document controller|inventory controller|project controller|game|controller \(m/w/d\)'
+$ExcludePattern  = 'data controller|data protection|air traffic|traffic controller|quality controller|document controller|inventory controller|project controller|game|controller \(m/w/d\)'
 $LocationPattern = 'philippines|davao|worldwide|anywhere|global|apac|asia|southeast asia'
 $OutFile         = Join-Path $PSScriptRoot 'jobs-feed.xml'
 
@@ -183,7 +183,7 @@ foreach ($q in $Keywords) {
 $seen = @{}
 $selected = $jobs | Where-Object {
     $_.Title -match $TitlePattern -and $_.Title -notmatch $ExcludePattern -and
-    $_.Location -match $LocationPattern -and
+    (($_.Location -match '^Remote' -and $_.Location -match $LocationPattern) -or $_.Location -match 'davao|toril') -and
     ($(if ($null -eq $_.MonthlyPhp) { $IncludeNoSalary } else { $_.MonthlyPhp -ge $MinMonthlyPhp }))
 } | Where-Object {
     $key = ($_.Title + '|' + $_.Company).ToLower()
@@ -226,7 +226,7 @@ $json = (ConvertTo-Json -InputObject $data -Depth 3 -Compress) -replace '</', '<
 $template = @'
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Finance Job Board</title>
+<title>Finance Job Board</title><meta name="build" content="__BUILD__">
 <style>
 :root{--bg:#f7f7f5;--card:#fff;--text:#1d1d1b;--muted:#6b6b66;--line:#e4e3de;--accent:#1f6f5c;--pay:#e6f3ee;--nopay:#f0efeb}
 @media (prefers-color-scheme:dark){:root{--bg:#161615;--card:#1f1f1d;--text:#ecebe6;--muted:#9a9993;--line:#33322f;--accent:#5cc2a4;--pay:#1e3a31;--nopay:#2a2a27}}
@@ -245,14 +245,36 @@ h1{font-size:22px;margin:0 0 4px}.sub{color:var(--muted);margin:0 0 20px;font-si
 .pay.none{background:var(--nopay);color:var(--muted);font-weight:500}
 .meta{margin-top:6px;font-size:13px;color:var(--muted);display:flex;flex-wrap:wrap;gap:4px 14px}
 @media (max-width:560px){.top{flex-direction:column}}
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.btn{padding:8px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:var(--card);font:inherit;font-weight:600;cursor:pointer;white-space:nowrap}
+.btn.ghost{background:transparent;color:var(--accent)}.btn:disabled{opacity:.6;cursor:default}
+.status{font-size:14px;margin:-8px 0 16px;color:var(--muted)}.status:empty{display:none}
+.setup{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:0 0 16px;font-size:14px}
+.setup[hidden]{display:none}.setup ol{margin:6px 0 10px;padding-left:20px}.setup a{color:var(--accent)}
+.setup .row{display:flex;flex-wrap:wrap;gap:8px}.setup input{flex:1 1 240px;padding:8px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit}
 </style></head><body><main>
-<h1>CFO / Controller / Accountant jobs</h1>
-<p class="sub">Remote (open to the Philippines) or Davao City &middot; min PHP __MIN__/month or equivalent &middot; updated __UPDATED__</p>
+<div class="head"><h1>CFO / Controller / Accountant jobs</h1><button class="btn" id="refresh">&#x21bb; Refresh jobs</button></div>
+<p class="sub">Remote (open to the Philippines) or Davao City &middot; min PHP __MIN__/month or equivalent &middot; updated <span id="updated">__UPDATED__</span></p>
+<div class="status" id="status"></div>
+<div class="setup" id="setup" hidden>
+<b>One-time setup on this device</b> &ndash; the button needs a GitHub token that can only run this job refresh.
+<ol>
+<li><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener">Create a fine-grained token</a> on GitHub.</li>
+<li>Repository access: <b>Only select repositories</b> &rarr; <b>job-feed</b>.</li>
+<li>Permissions &rarr; Repository &rarr; <b>Actions: Read and write</b>. Nothing else.</li>
+<li>Generate, copy it, and paste it below. It is saved only in this browser.</li>
+</ol>
+<div class="row"><input type="password" id="token" placeholder="github_pat_..." autocomplete="off">
+<button class="btn" id="save">Save &amp; refresh</button>
+<a class="btn ghost" id="manual" target="_blank" rel="noopener">Run on GitHub instead</a></div>
+</div>
 <div class="bar">
 <input type="search" id="q" placeholder="Search title, company, location">
 <select id="src"><option value="">All sources</option></select>
-<select id="where"><option value="">Remote + Davao</option><option value="remote">Remote only</option><option value="davao">Davao only</option></select>
-<label><input type="checkbox" id="paid"> Salary stated only</label>
+<select id="where"><option value="">All locations</option><option value="remote">Remote (any)</option><option value="davao">Davao (all areas)</option></select>
+<select id="pay"><option value="">Any salary</option><option value="80-100">PHP 80k &ndash; 100k</option><option value="100-150">PHP 100k &ndash; 150k</option><option value="150-200">PHP 150k &ndash; 200k</option><option value="200-">PHP 200k and up</option><option value="stated">Salary stated (any)</option><option value="none">Salary not stated</option></select>
+<select id="sort"><option value="new">Newest first</option><option value="pay">Highest pay first</option></select>
+<button class="btn ghost" id="clear" type="button">Clear filters</button>
 </div>
 <div class="count" id="count"></div><div id="list"></div>
 </main><script>
@@ -260,22 +282,117 @@ const jobs = __DATA__;
 const $ = id => document.getElementById(id);
 [...new Set(jobs.map(j => j.s))].sort().forEach(s => $('src').add(new Option(s, s)));
 const esc = s => String(s ?? '').replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+// Specific places (e.g. "Davao City", "Toril", "Makati (remote)") for the location dropdown
+const place = j => {
+  const remote = /^Remote/.test(j.loc);
+  let p = remote ? (j.loc.match(/\(([^)]+)\)/) || [])[1] || '' : j.loc.replace(/\s*\(.*\)\s*$/, '');
+  p = p.split(/[,;]/)[0].trim();
+  return p ? p + (remote ? ' (remote)' : '') : '';
+};
+const places = {};
+jobs.forEach(j => { const p = place(j); if (p) places[p] = (places[p] || 0) + 1; });
+Object.keys(places).sort((a, b) => (/davao|toril/i.test(b) - /davao|toril/i.test(a)) || places[b] - places[a] || a.localeCompare(b))
+  .forEach(p => $('where').add(new Option(p + ' (' + places[p] + ')', 'p:' + p)));
+function inBracket(j, b) {
+  if (!b) return true;
+  if (b === 'stated') return !!j.p;
+  if (b === 'none') return !j.p;
+  const [lo, hi] = b.split('-').map(n => n ? +n * 1000 : null);
+  return !!j.p && j.p >= lo && (hi === null || j.p < hi);
+}
+function inPlace(j, w) {
+  if (!w) return true;
+  if (w === 'remote') return /^Remote/.test(j.loc);
+  if (w === 'davao') return /davao|toril/i.test(j.loc);
+  return place(j) === w.slice(2);
+}
 function render() {
-  const q = $('q').value.toLowerCase(), src = $('src').value, w = $('where').value, paid = $('paid').checked;
+  const q = $('q').value.toLowerCase(), src = $('src').value, w = $('where').value, b = $('pay').value;
   const rows = jobs.filter(j =>
     (!q || (j.t + ' ' + j.c + ' ' + j.loc).toLowerCase().includes(q)) && (!src || j.s === src) &&
-    (!paid || j.p) && (!w || (w === 'remote' ? /^Remote/.test(j.loc) : /davao/i.test(j.loc))));
+    inBracket(j, b) && inPlace(j, w));
+  if ($('sort').value === 'pay') rows.sort((x, y) => (y.p || 0) - (x.p || 0));
+  else rows.sort((x, y) => y.d.localeCompare(x.d));
   $('count').textContent = rows.length + ' of ' + jobs.length + ' jobs';
   $('list').innerHTML = rows.map(j => `<a class="job" href="${esc(j.l)}" target="_blank" rel="noopener">
     <div class="top"><div><div class="title">${esc(j.t)}</div><div class="co">${esc(j.c)}</div></div>
     <span class="pay${j.p ? '' : ' none'}" title="${esc(j.raw)}">${j.p ? '~PHP ' + j.p.toLocaleString() + '/mo' : 'Salary not stated'}</span></div>
     <div class="meta"><span>${esc(j.loc)}</span><span>${esc(j.s)}</span><span>${esc(j.d)}</span></div></a>`).join('');
 }
-['q','src','where','paid'].forEach(id => $(id).addEventListener('input', render));
+const FILTERS = ['q', 'src', 'where', 'pay', 'sort'];
+// Remember the last-used filters on this device
+try { const saved = JSON.parse(localStorage.getItem('job_filters') || '{}');
+  FILTERS.forEach(id => { if (saved[id] != null && [...($(id).options || [{ value: saved[id] }])].some(o => o.value === saved[id])) $(id).value = saved[id]; }); } catch {}
+FILTERS.forEach(id => $(id).addEventListener('input', () => {
+  render();
+  try { localStorage.setItem('job_filters', JSON.stringify(Object.fromEntries(FILTERS.map(f => [f, $(f).value])))); } catch {}
+}));
+$('clear').addEventListener('click', () => {
+  $('q').value = ''; ['src', 'where', 'pay'].forEach(id => $(id).value = ''); $('sort').value = 'new';
+  try { localStorage.removeItem('job_filters'); } catch {}
+  render();
+});
 render();
+
+// ---- Manual refresh: runs the GitHub workflow, then reloads once the new page is published ----
+const REPO = 'ejadee01/job-feed', WORKFLOW = 'refresh.yml', BUILD = '__BUILD__';
+const API = 'https://api.github.com/repos/' + REPO;
+$('manual').href = 'https://github.com/' + REPO + '/actions/workflows/' + WORKFLOW;
+const store = { get: () => { try { return localStorage.getItem('gh_token') || ''; } catch { return ''; } },
+                set: v => { try { v ? localStorage.setItem('gh_token', v) : localStorage.removeItem('gh_token'); } catch {} } };
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+const say = t => { $('status').textContent = t; };
+async function gh(path, opts = {}) {
+  const res = await fetch(API + path, { ...opts, headers: { Authorization: 'Bearer ' + store.get(),
+    Accept: 'application/vnd.github+json', 'X-GitHub-Api-Version': '2022-11-28' } });
+  if (res.status === 401 || res.status === 403 || res.status === 404) { const e = new Error('auth'); e.status = res.status; throw e; }
+  if (!res.ok) throw new Error('GitHub returned ' + res.status);
+  return res.status === 204 ? null : res.json();
+}
+async function refreshJobs() {
+  const btn = $('refresh'); btn.disabled = true; $('setup').hidden = true;
+  const started = Date.now();
+  const tick = setInterval(() => { const s = Math.round((Date.now() - started) / 1000);
+    btn.textContent = 'Refreshing… ' + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }, 1000);
+  try {
+    // Follow a run that is already going, otherwise start one
+    let run = (await gh('/actions/workflows/' + WORKFLOW + '/runs?per_page=1')).workflow_runs[0];
+    if (!run || run.status === 'completed') {
+      say('Starting the job search on GitHub…');
+      await gh('/actions/workflows/' + WORKFLOW + '/dispatches', { method: 'POST', body: JSON.stringify({ ref: 'main' }) });
+      for (let i = 0; i < 20; i++) {
+        await sleep(3000);
+        const r = (await gh('/actions/workflows/' + WORKFLOW + '/runs?per_page=1')).workflow_runs[0];
+        if (r && Date.parse(r.created_at) >= started - 60000 && (!run || r.id !== run.id)) { run = r; break; }
+      }
+    }
+    say('Collecting the latest postings from all job sites (about 5 minutes)…');
+    while (run.status !== 'completed') { await sleep(10000); run = await gh('/actions/runs/' + run.id); }
+    if (run.conclusion !== 'success') throw new Error('the refresh failed on GitHub (' + run.conclusion + ')');
+    say('Publishing the updated page…');
+    for (let i = 0; i < 40; i++) {
+      await sleep(8000);
+      const html = await (await fetch(location.pathname + '?v=' + Date.now(), { cache: 'no-store' })).text();
+      const m = html.match(/name="build" content="([^"]+)"/);
+      if (m && m[1] !== BUILD) { say('Done - loading the latest jobs…'); location.replace(location.pathname + '?v=' + Date.now()); return; }
+    }
+    throw new Error('the new page is taking longer than usual to publish; reload in a few minutes');
+  } catch (e) {
+    if (e.message === 'auth') { store.set(''); $('setup').hidden = false;
+      say(e.status === 404 ? 'That token cannot see the job-feed repo. Check the setup steps.' : 'That token was not accepted. Please paste a new one.'); }
+    else say('Could not refresh: ' + e.message);
+  } finally { clearInterval(tick); btn.disabled = false; btn.innerHTML = '&#x21bb; Refresh jobs'; }
+}
+$('refresh').addEventListener('click', () => {
+  if (store.get()) refreshJobs(); else { $('setup').hidden = !$('setup').hidden; $('token').focus(); }
+});
+$('save').addEventListener('click', () => {
+  const t = $('token').value.trim(); if (!t) return;
+  store.set(t); $('token').value = ''; refreshJobs();
+});
 </script></body></html>
 '@
-$html = $template.Replace('__DATA__', $json).Replace('__MIN__', ('{0:N0}' -f $MinMonthlyPhp)).Replace('__UPDATED__', ([DateTime]::UtcNow.AddHours(8).ToString('MMM d, yyyy h:mm tt') + ' PH time'))
+$html = $template.Replace('__DATA__', $json).Replace('__MIN__', ('{0:N0}' -f $MinMonthlyPhp)).Replace('__BUILD__', [DateTime]::UtcNow.ToString('yyyyMMddHHmmss')).Replace('__UPDATED__', ([DateTime]::UtcNow.AddHours(8).ToString('MMM d, yyyy h:mm tt') + ' PH time'))
 [IO.File]::WriteAllText($HtmlFile, $html, (New-Object Text.UTF8Encoding $false))
 
 $withPay = @($selected | ? { $_.MonthlyPhp }).Count
