@@ -179,6 +179,61 @@ foreach ($q in $Keywords) {
     }
 }
 
+# Upwork (official GraphQL API). Runs only when the UPWORK_CLIENT_ID, UPWORK_CLIENT_SECRET and
+# UPWORK_REFRESH_TOKEN environment variables are set - see "Upwork setup" in README.md.
+# Upwork access tokens last 24 hours, so every run trades the refresh token for a fresh one and,
+# if UPWORK_TOKEN_OUT is set, writes the newest refresh token there so the workflow can save it.
+if ($env:UPWORK_CLIENT_ID -and $env:UPWORK_CLIENT_SECRET -and $env:UPWORK_REFRESH_TOKEN) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+    $tok = $null
+    try {
+        $tok = Invoke-RestMethod -Method Post -Uri 'https://www.upwork.com/api/v3/oauth2/token' -Headers @{ Accept = 'application/json' } `
+            -ContentType 'application/x-www-form-urlencoded' -Body @{ grant_type = 'refresh_token'; client_id = $env:UPWORK_CLIENT_ID
+                client_secret = $env:UPWORK_CLIENT_SECRET; refresh_token = $env:UPWORK_REFRESH_TOKEN }
+    } catch { Write-Warning "Upwork: token refresh failed ($($_.Exception.Message)). Run upwork-auth.ps1 again to reconnect." }
+    if ($tok.refresh_token -and $env:UPWORK_TOKEN_OUT) { [IO.File]::WriteAllText($env:UPWORK_TOKEN_OUT, $tok.refresh_token) }
+
+    $gql = @'
+query($filter: MarketplaceJobPostingsSearchFilter) {
+  marketplaceJobPostingsSearch(marketPlaceJobFilter: $filter, searchType: USER_JOBS_SEARCH, sortAttributes: [{ field: RECENCY }]) {
+    edges { node {
+      title description ciphertext publishedDateTime engagement durationLabel
+      amount { rawValue currency } hourlyBudgetMin { rawValue currency } hourlyBudgetMax { rawValue currency }
+      preferredFreelancerLocation preferredFreelancerLocationMandatory
+      client { location { country } }
+    } }
+  }
+}
+'@
+    foreach ($q in $(if ($tok.access_token) { $Keywords } else { @() })) {
+        $body = @{ query = $gql; variables = @{ filter = @{ titleExpression_eq = $q; daysPosted_eq = 14; pagination_eq = @{ after = '0'; first = 50 } } } } | ConvertTo-Json -Depth 8 -Compress
+        $up = New-Object Net.WebClient
+        $up.Encoding = [Text.Encoding]::UTF8
+        $up.Headers['Authorization'] = "Bearer $($tok.access_token)"
+        $up.Headers['Content-Type'] = 'application/json'
+        try { $r = $up.UploadString('https://api.upwork.com/graphql', $body) | ConvertFrom-Json }
+        catch { Write-Warning "Upwork search '$q' failed: $($_.Exception.Message)"; continue }
+        if ($r.errors) { Write-Warning "Upwork search '$q': $($r.errors.message -join '; ')"; continue }
+        foreach ($n in $r.data.marketplaceJobPostingsSearch.edges.node) {
+            # Skip jobs whose client only accepts freelancers from countries other than the Philippines
+            $places = @($n.preferredFreelancerLocation | Where-Object { $_ })
+            if ($n.preferredFreelancerLocationMandatory -and $places.Count -and -not ($places -match 'Philippines|Asia|Worldwide')) { continue }
+            $loc = if ($n.preferredFreelancerLocationMandatory -and $places.Count) { "Remote - $($places -join ', ')" } else { 'Remote - Worldwide' }
+            if ($n.client.location.country) { $loc += " (client in $($n.client.location.country))" }
+            # Hourly jobs have an hourly rate (converted to monthly at 160 hrs); a fixed-price budget is a one-off, so it only goes in the summary
+            $hiMin = $n.hourlyBudgetMin.rawValue; $hiMax = $n.hourlyBudgetMax.rawValue
+            $hasRate = [double]("0$hiMax") -gt 0 -or [double]("0$hiMin") -gt 0
+            $cur = if ($n.hourlyBudgetMax.currency) { $n.hourlyBudgetMax.currency } elseif ($n.hourlyBudgetMin.currency) { $n.hourlyBudgetMin.currency } else { 'USD' }
+            $facts = @($(if ($hasRate) { 'Hourly' } elseif ([double]("0$($n.amount.rawValue)") -gt 0) { "Fixed price $($n.amount.currency) $($n.amount.rawValue)" }), $n.engagement, $n.durationLabel) | Where-Object { $_ }
+            $desc = ("$($n.description)" -replace '\s+', ' ').Trim()
+            if ($desc.Length -gt 300) { $desc = $desc.Substring(0, 300) + '...' }
+            $summary = (($facts -join ' | ') + ' - ' + $desc).Trim(' -')
+            Add-Job $n.title 'Upwork client' "https://www.upwork.com/jobs/$($n.ciphertext)" $loc ([datetime]$n.publishedDateTime) 'Upwork' `
+                $(if ($hasRate) { $hiMin }) $(if ($hasRate) { $hiMax }) $cur $(if ($hasRate) { 'hour' }) $summary
+        }
+    }
+} else { Write-Host 'Upwork: skipped (API secrets not set).' }
+
 # ---------------- Filter ----------------
 $seen = @{}
 $selected = $jobs | Where-Object {
@@ -197,7 +252,7 @@ $sb = New-Object Text.StringBuilder
 [void]$sb.AppendLine('<rss version="2.0"><channel>')
 [void]$sb.AppendLine('<title>CFO / Controller / Accountant jobs - Remote (PH) or Davao</title>')
 [void]$sb.AppendLine('<link>https://himalayas.app/jobs/countries/philippines</link>')
-[void]$sb.AppendLine("<description>Min PHP $('{0:N0}' -f $MinMonthlyPhp)/month or equivalent. Sources: JobStreet, LinkedIn, Kalibrr, OnlineJobs.ph, Himalayas, Jobicy, Remotive, Remote OK.</description>")
+[void]$sb.AppendLine("<description>Min PHP $('{0:N0}' -f $MinMonthlyPhp)/month or equivalent. Sources: JobStreet, LinkedIn, Kalibrr, OnlineJobs.ph, Upwork, Himalayas, Jobicy, Remotive, Remote OK.</description>")
 [void]$sb.AppendLine("<lastBuildDate>$((Get-Date).ToUniversalTime().ToString('r'))</lastBuildDate>")
 foreach ($m in $selected) {
     $pay = if ($m.MonthlyPhp) { "~PHP {0:N0}/mo" -f $m.MonthlyPhp } else { 'Salary not stated' }

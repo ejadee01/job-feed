@@ -18,7 +18,28 @@ jobs:
 
       - name: Build feed and page
         shell: powershell
+        env:
+          UPWORK_CLIENT_ID: ${{ secrets.UPWORK_CLIENT_ID }}
+          UPWORK_CLIENT_SECRET: ${{ secrets.UPWORK_CLIENT_SECRET }}
+          UPWORK_REFRESH_TOKEN: ${{ secrets.UPWORK_REFRESH_TOKEN }}
+          UPWORK_TOKEN_OUT: ${{ runner.temp }}/upwork-refresh-token
         run: .\build-job-feed.ps1
+
+      # Upwork may hand out a new refresh token on every run. Saving it back into the repo's
+      # secrets needs a token with "Secrets: write" access (SECRETS_PAT); see README.
+      - name: Save new Upwork refresh token
+        shell: bash
+        env:
+          OLD_TOKEN: ${{ secrets.UPWORK_REFRESH_TOKEN }}
+          GH_TOKEN: ${{ secrets.SECRETS_PAT }}
+          TOKEN_FILE: ${{ runner.temp }}/upwork-refresh-token
+        run: |
+          if [ ! -s "$TOKEN_FILE" ]; then echo "No Upwork token to save."; exit 0; fi
+          if [ "$(cat "$TOKEN_FILE")" = "$OLD_TOKEN" ]; then echo "Upwork refresh token unchanged."; rm -f "$TOKEN_FILE"; exit 0; fi
+          if [ -z "$GH_TOKEN" ]; then echo "::warning::Upwork issued a new refresh token but SECRETS_PAT is not set, so it could not be saved. Add SECRETS_PAT (see README) and run upwork-auth.ps1 again."; rm -f "$TOKEN_FILE"; exit 0; fi
+          gh secret set UPWORK_REFRESH_TOKEN --repo "${{ github.repository }}" < "$TOKEN_FILE"
+          rm -f "$TOKEN_FILE"
+          echo "Saved new Upwork refresh token."
 
       - name: Commit updated files
         shell: bash
